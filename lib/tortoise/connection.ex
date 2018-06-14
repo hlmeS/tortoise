@@ -59,7 +59,7 @@ defmodule Tortoise.Connection do
     }
   end
 
-  # Public interface
+  @doc false
   def publish(client_id, topic, payload \\ nil, opts \\ []) do
     qos = Keyword.get(opts, :qos, 0)
 
@@ -99,7 +99,7 @@ defmodule Tortoise.Connection do
     end
   end
 
-  # subscribe/unsubscribe
+  @doc false
   def subscribe(client_id, topics, opts \\ [])
 
   def subscribe(client_id, [{_, n} | _] = topics, opts) when is_number(n) do
@@ -124,6 +124,7 @@ defmodule Tortoise.Connection do
     end
   end
 
+  @doc false
   def subscribe_sync(client_id, topics, opts \\ [])
 
   def subscribe_sync(client_id, [{_, n} | _] = topics, opts) when is_number(n) do
@@ -152,6 +153,7 @@ defmodule Tortoise.Connection do
     end
   end
 
+  @doc false
   def unsubscribe(client_id, topics, opts \\ [])
 
   def unsubscribe(client_id, [topic | _] = topics, opts) when is_binary(topic) do
@@ -166,6 +168,7 @@ defmodule Tortoise.Connection do
     unsubscribe(client_id, [topic], opts)
   end
 
+  @doc false
   def unsubscribe_sync(client_id, topics, opts \\ [])
 
   def unsubscribe_sync(client_id, topics, opts) when is_list(topics) do
