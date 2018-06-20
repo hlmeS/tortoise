@@ -18,22 +18,41 @@ defmodule Tortoise.Connection do
   alias Tortoise.Connection.{Inflight, Controller, Receiver, Transmitter}
   alias Tortoise.Package.{Connect, Connack}
 
-  def start_link(opts) do
-    client_id = Keyword.fetch!(opts, :client_id)
-    server = opts |> Keyword.fetch!(:server) |> Transport.new()
+  @doc """
+  Start a connection process and link it to the current process.
+
+  Read the documentation on `child_spec/1` if you want... (todo!)
+
+  """
+  @spec start_link(connection_options, GenServer.options()) :: GenServer.on_start()
+        when connection_option:
+               {:client_id, String.t()}
+               | {:user_name, String.t()}
+               | {:password, String.t()}
+               | {:keep_alive, pos_integer()}
+               | {:will, Tortoise.Package.Publish.t()}
+               | {:subscriptions, [{String.t(), 0..2}] | Tortoise.Package.Subscribe.t()}
+               | {:handler, {atom(), term()}},
+             connection_options: [connection_option]
+  def start_link(connection_opts, opts \\ []) do
+    client_id = Keyword.fetch!(connection_opts, :client_id)
+    server = connection_opts |> Keyword.fetch!(:server) |> Transport.new()
 
     connect = %Package.Connect{
       client_id: client_id,
-      user_name: Keyword.get(opts, :user_name),
-      password: Keyword.get(opts, :password),
-      keep_alive: Keyword.get(opts, :keep_alive, 60),
-      will: Keyword.get(opts, :last_will),
+      user_name: Keyword.get(connection_opts, :user_name),
+      password: Keyword.get(connection_opts, :password),
+      keep_alive: Keyword.get(connection_opts, :keep_alive, 60),
+      will: Keyword.get(connection_opts, :last_will),
       # if we re-spawn from here it means our state is gone
       clean_session: true
     }
 
+    # This allow us to either pass in a list of topics, or a
+    # subscription struct. Passing in a subscription struct is helpful
+    # in tests.
     subscriptions =
-      case Keyword.get(opts, :subscriptions, []) do
+      case Keyword.get(connection_opts, :subscriptions, []) do
         topics when is_list(topics) ->
           Enum.into(topics, %Package.Subscribe{})
 
@@ -42,9 +61,10 @@ defmodule Tortoise.Connection do
       end
 
     # @todo, validate that the handler is valid
-    opts = Keyword.take(opts, [:client_id, :handler])
-    initial = {server, connect, subscriptions, opts}
-    GenServer.start_link(__MODULE__, initial, name: via_name(client_id))
+    connection_opts = Keyword.take(connection_opts, [:client_id, :handler])
+    initial = {server, connect, subscriptions, connection_opts}
+    opts = Keyword.merge(opts, name: via_name(client_id))
+    GenServer.start_link(__MODULE__, initial, opts)
   end
 
   defp via_name(client_id) do
@@ -57,6 +77,25 @@ defmodule Tortoise.Connection do
       start: {__MODULE__, :start_link, [opts]},
       type: :worker
     }
+  end
+
+  @doc """
+  Reconnect to the broker using the current connection configuration.
+  """
+  @spec reconnect(client_id()) :: :ok
+  def reconnect(client_id) do
+    GenServer.cast(via_name(client_id), :reconnect)
+  end
+
+  @doc """
+  Return the list of subscribed topics.
+
+  Given the `client_id` of a running connection return its current
+  subscriptions. This is helpful in a debugging situation.
+  """
+  @spec subscriptions(client_id()) :: Tortoise.Package.Subscribe.t()
+  def subscriptions(client_id) do
+    GenServer.call(via_name(client_id), :subscriptions)
   end
 
   @doc false
@@ -188,17 +227,8 @@ defmodule Tortoise.Connection do
     unsubscribe_sync(client_id, [topic], opts)
   end
 
-  def subscriptions(client_id) do
-    GenServer.call(via_name(client_id), :subscriptions)
-  end
-
-  @doc false
-  @spec renew(client_id()) :: :ok
-  def renew(client_id) do
-    GenServer.cast(via_name(client_id), :renew_connection)
-  end
-
   # Callbacks
+  @impl true
   def init({transport, %Connect{} = connect, subscriptions, opts}) do
     expected_connack = %Connack{status: :accepted, session_present: false}
 
@@ -226,6 +256,7 @@ defmodule Tortoise.Connection do
     end
   end
 
+  @impl true
   def handle_info(:subscribe, %State{subscriptions: subscriptions} = state) do
     client_id = state.connect.client_id
 
@@ -272,11 +303,13 @@ defmodule Tortoise.Connection do
     do_attempt_reconnect(state)
   end
 
+  @impl true
   def handle_call(:subscriptions, _from, state) do
     {:reply, state.subscriptions, state}
   end
 
-  def handle_cast(:renew_connection, state) do
+  @impl true
+  def handle_cast(:reconnect, state) do
     :ok = Controller.update_connection_status(state.connect.client_id, :down)
     do_attempt_reconnect(state)
   end
